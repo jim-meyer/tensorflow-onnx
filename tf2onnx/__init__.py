@@ -10,4 +10,4 @@ __all__ = ["utils", "graph_matcher", "graph", "loader", "tfonnx", "shape_inferen
 
 from .version import version as __version__
 from . import logging
-from tf2onnx import tfonnx, utils, graph, graph_matcher, shape_inference, schemas  # pylint: disable=wrong-import-order
+from tf2onnx import convert, tfonnx, utils, graph, loader, graph_matcher, shape_inference, schemas  # pylint: disable=wrong-import-order

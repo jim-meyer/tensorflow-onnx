@@ -39,6 +39,7 @@ def get_args():
     parser.add_argument("--continue_on_error", help="continue_on_error", action="store_true")
     parser.add_argument("--verbose", "-v", help="verbose output, option is additive", action="count")
     parser.add_argument("--debug", help="debug mode", action="store_true")
+    # todo: consider to enable const folding by default?
     parser.add_argument("--fold_const", help="enable tf constant_folding transformation before conversion",
                         action="store_true")
     # experimental
@@ -79,6 +80,48 @@ def default_custom_op_handler(ctx, node, name, args):
     return node
 
 
+def convert(model_path, graph_def, inputs, outputs, shape_override=None,
+            custom_ops={}, extra_opset=None, continue_on_error=False,
+            target=constants.DEFAULT_TARGET, opset=None, inputs_as_nchw=None,
+            fold_const=False, output=None):
+    """Convert the given tf graphdef to ONNX.
+    Obtain the graph_def via one of:
+        `loader.from_graphdef()`
+        `loader.from_checkpoint()`
+        `loader.from_saved_model()`
+    """
+    graph_def = tf_optimize(inputs, outputs, graph_def, fold_const)
+
+    with tf.Graph().as_default() as tf_graph:
+        tf.import_graph_def(graph_def, name='')
+    with tf.Session(graph=tf_graph):
+        g = process_tf_graph(tf_graph,
+                             continue_on_error=continue_on_error,
+                             target=target,
+                             opset=opset,
+                             custom_op_handlers=custom_ops,
+                             extra_opset=extra_opset,
+                             shape_override=shape_override,
+                             input_names=inputs,
+                             output_names=outputs,
+                             inputs_as_nchw=inputs_as_nchw)
+
+    model_proto = g.make_model("converted from {}".format(model_path))
+
+    new_model_proto = GraphUtil.optimize_model_proto(model_proto)
+    if new_model_proto:
+        model_proto = new_model_proto
+    else:
+        print("NON-CRITICAL, optimizers are not applied successfully")
+
+    # write onnx graph
+    if output:
+        utils.save_protobuf(output, model_proto)
+        print("\nComplete successfully, the onnx model is generated at " + output)
+
+    return model_proto
+
+
 def main():
     args = get_args()
     logging.basicConfig(level=logging.get_verbosity_level(args.verbose))
@@ -107,35 +150,13 @@ def main():
         graph_def, inputs, outputs = loader.from_saved_model(args.saved_model, args.inputs, args.outputs)
         model_path = args.saved_model
 
-    # todo: consider to enable const folding by default?
-    graph_def = tf_optimize(inputs, outputs, graph_def, args.fold_const)
-
-    with tf.Graph().as_default() as tf_graph:
-        tf.import_graph_def(graph_def, name='')
-    with tf.Session(graph=tf_graph):
-        g = process_tf_graph(tf_graph,
-                             continue_on_error=args.continue_on_error,
-                             target=args.target,
-                             opset=args.opset,
-                             custom_op_handlers=custom_ops,
-                             extra_opset=extra_opset,
-                             shape_override=args.shape_override,
-                             input_names=inputs,
-                             output_names=outputs,
-                             inputs_as_nchw=args.inputs_as_nchw)
-
-    model_proto = g.make_model("converted from {}".format(model_path))
-
-    new_model_proto = GraphUtil.optimize_model_proto(model_proto)
-    if new_model_proto:
-        model_proto = new_model_proto
-    else:
-        print("NON-CRITICAL, optimizers are not applied successfully")
-
-    # write onnx graph
-    if args.output:
-        utils.save_protobuf(args.output, model_proto)
-        print("\nComplete successfully, the onnx model is generated at " + args.output)
+    convert(model_path, graph_def, inputs, outputs,
+            shape_override=args.shape_override,
+            custom_ops=custom_ops, extra_opset=extra_opset,
+            continue_on_error=args.continue_on_error,
+            target=args.target, opset=args.opset,
+            inputs_as_nchw=args.inputs_as_nchw,
+            fold_const=args.fold_const, output=args.output)
 
 
 if __name__ == "__main__":
